@@ -42,193 +42,195 @@ import com.google.gson.JsonObject;
  * @author Boni Garcia (bgarcia@gsyc.es)
  * @since 5.0.0
  */
+@SuppressWarnings("Duplicates")
 public class CallHandler extends TextWebSocketHandler {
 
-  private static final Logger log = LoggerFactory.getLogger(CallHandler.class);
-  private static final Gson gson = new GsonBuilder().create();
+    private static final Logger log = LoggerFactory.getLogger(CallHandler.class);
+    private static final Gson gson = new GsonBuilder().create();
 
-  private final ConcurrentHashMap<String, UserSession> viewers = new ConcurrentHashMap<>();
+    private final ConcurrentHashMap<String, UserSession> viewers = new ConcurrentHashMap<>();
 
-  @Autowired
-  private KurentoClient kurento;
+    @Autowired
+    private KurentoClient kurento;
 
 
-  private List<UserSession> userSessionList = new ArrayList<>();
-  private MediaPipeline pipeline;
-  private UserSession presenterUserSession;
-  private Composite composite;
-  private HubPort hubPort;
+    private List<UserSession> presenterSessionList = new ArrayList<>();
+    private List<UserSession> subscriberSessionList = new ArrayList<>();
+    private MediaPipeline pipeline;
+    private UserSession presenterUserSession;
+    private Composite composite;
+    private int i = 0;
+    private List<HubPort> hubPortList = new ArrayList<>();
 
-  @Override
-  public void handleTextMessage(WebSocketSession session, TextMessage message) throws Exception {
-    JsonObject jsonMessage = gson.fromJson(message.getPayload(), JsonObject.class);
-    log.debug("Incoming message from session '{}': {}", session.getId(), jsonMessage);
+    @Override
+    public void handleTextMessage(WebSocketSession session, TextMessage message) throws Exception {
+        JsonObject jsonMessage = gson.fromJson(message.getPayload(), JsonObject.class);
+        log.debug("Incoming message from session '{}': {}", session.getId(), jsonMessage);
 
-    switch (jsonMessage.get("id").getAsString()) {
-      case "presenter":
-        try {
-          presenter(session, jsonMessage);
-        } catch (Throwable t) {
-          handleErrorResponse(t, session, "presenterResponse");
-        }
-        break;
-      case "viewer":
-        try {
-          viewer(session, jsonMessage);
-        } catch (Throwable t) {
-          handleErrorResponse(t, session, "viewerResponse");
-        }
-        break;
-      case "onIceCandidate": {
-        JsonObject candidate = jsonMessage.get("candidate").getAsJsonObject();
+        switch (jsonMessage.get("id").getAsString()) {
+            case "presenter":
+                try {
+                    presenter(session, jsonMessage);
+                } catch (Throwable t) {
+                    handleErrorResponse(t, session, "presenterResponse");
+                }
+                break;
+            case "viewer":
+                try {
+                    viewer(session, jsonMessage);
+                } catch (Throwable t) {
+                    handleErrorResponse(t, session, "viewerResponse");
+                }
+                break;
+            case "onIceCandidate": {
+                JsonObject candidate = jsonMessage.get("candidate").getAsJsonObject();
 
-        UserSession user = null;
-        if (presenterUserSession != null) {
-          if (presenterUserSession.getSession() == session) {
-            user = presenterUserSession;
-          } else {
-            user = viewers.get(session.getId());
-          }
-        }
-        if (user != null) {
-          IceCandidate cand =
-              new IceCandidate(candidate.get("candidate").getAsString(), candidate.get("sdpMid")
-                  .getAsString(), candidate.get("sdpMLineIndex").getAsInt());
-          user.addCandidate(cand);
-        }
-        break;
-      }
-      case "stop":
-        stop(session);
-        break;
-      default:
-        break;
-    }
-  }
-
-  private void handleErrorResponse(Throwable throwable, WebSocketSession session, String responseId)
-      throws IOException {
-    stop(session);
-    log.error(throwable.getMessage(), throwable);
-    JsonObject response = new JsonObject();
-    response.addProperty("id", responseId);
-    response.addProperty("response", "rejected");
-    response.addProperty("message", throwable.getMessage());
-    session.sendMessage(new TextMessage(response.toString()));
-  }
-
-  private synchronized void presenter(final WebSocketSession session, JsonObject jsonMessage)
-      throws IOException {
-//    if (presenterUserSession == null) {
-
-      presenterUserSession = new UserSession(session);
-      if (pipeline == null) {
-          pipeline = kurento.createMediaPipeline();
-      }
-      presenterUserSession.setWebRtcEndpoint(new WebRtcEndpoint.Builder(pipeline).build());
-
-      WebRtcEndpoint presenterWebRtc = presenterUserSession.getWebRtcEndpoint();
-
-      presenterWebRtc.addIceCandidateFoundListener(new EventListener<IceCandidateFoundEvent>() {
-
-        @Override
-        public void onEvent(IceCandidateFoundEvent event) {
-          JsonObject response = new JsonObject();
-          response.addProperty("id", "iceCandidate");
-          response.add("candidate", JsonUtils.toJsonObject(event.getCandidate()));
-          try {
-            synchronized (session) {
-              session.sendMessage(new TextMessage(response.toString()));
+                UserSession user = null;
+                if (presenterUserSession != null) {
+                    if (presenterUserSession.getSession() == session) {
+                        user = presenterUserSession;
+                    } else {
+                        user = viewers.get(session.getId());
+                    }
+                }
+                if (user != null) {
+                    IceCandidate cand =
+                            new IceCandidate(candidate.get("candidate").getAsString(), candidate.get("sdpMid")
+                                    .getAsString(), candidate.get("sdpMLineIndex").getAsInt());
+                    user.addCandidate(cand);
+                }
+                break;
             }
-          } catch (IOException e) {
-            log.debug(e.getMessage());
-          }
+            case "stop":
+                stop(session);
+                break;
+            default:
+                break;
         }
-      });
+    }
+
+    private void handleErrorResponse(Throwable throwable, WebSocketSession session, String responseId)
+            throws IOException {
+        stop(session);
+        log.error(throwable.getMessage(), throwable);
+        JsonObject response = new JsonObject();
+        response.addProperty("id", responseId);
+        response.addProperty("response", "rejected");
+        response.addProperty("message", throwable.getMessage());
+        session.sendMessage(new TextMessage(response.toString()));
+    }
+
+    private synchronized void presenter(final WebSocketSession session, JsonObject jsonMessage)
+            throws IOException {
+        if(presenterSessionList.size()>3){
+            JsonObject response = new JsonObject();
+            response.addProperty("id", "presenterResponse");
+            response.addProperty("response", "rejected");
+            response.addProperty("message",
+                    "Maximum amount of publishers is reached. Try again later ...");
+            session.sendMessage(new TextMessage(response.toString()));
+        } else {
+            presenterUserSession = new UserSession(session);
+            if (pipeline == null) {
+                pipeline = kurento.createMediaPipeline();
+            }
+            presenterUserSession.setWebRtcEndpoint(new WebRtcEndpoint.Builder(pipeline).build());
+
+            WebRtcEndpoint presenterWebRtc = presenterUserSession.getWebRtcEndpoint();
+
+            presenterWebRtc.addIceCandidateFoundListener(new EventListener<IceCandidateFoundEvent>() {
+
+                @Override
+                public void onEvent(IceCandidateFoundEvent event) {
+                    JsonObject response = new JsonObject();
+                    response.addProperty("id", "iceCandidate");
+                    response.add("candidate", JsonUtils.toJsonObject(event.getCandidate()));
+                    try {
+                        synchronized (session) {
+                            session.sendMessage(new TextMessage(response.toString()));
+                        }
+                    } catch (IOException e) {
+                        log.debug(e.getMessage());
+                    }
+                }
+            });
 
 
-      userSessionList.add(presenterUserSession);
-      if (composite == null){
-          composite = new Composite.Builder(pipeline).build();
-      }
+            presenterSessionList.add(presenterUserSession);
+            if (composite == null) {
+                composite = new Composite.Builder(pipeline).build();
+            }
+            System.out.println(hubPortList.isEmpty());
+            if (hubPortList.isEmpty()) {
+                hubPortList = initializeHubPorts();
+            }
 
-      if (hubPort == null) {
-          hubPort = new HubPort.Builder(composite).build();
-      }
+            presenterWebRtc.connect(hubPortList.get(i));
 
-      presenterWebRtc.connect(hubPort);
-      hubPort.connect(presenterWebRtc);
+            String sdpOffer = jsonMessage.getAsJsonPrimitive("sdpOffer").getAsString();
+            String sdpAnswer = presenterWebRtc.processOffer(sdpOffer);
 
-      String sdpOffer = jsonMessage.getAsJsonPrimitive("sdpOffer").getAsString();
-      String sdpAnswer = presenterWebRtc.processOffer(sdpOffer);
+            JsonObject response = new JsonObject();
+            response.addProperty("id", "presenterResponse");
+            response.addProperty("response", "accepted");
+            response.addProperty("sdpAnswer", sdpAnswer);
 
-      JsonObject response = new JsonObject();
-      response.addProperty("id", "presenterResponse");
-      response.addProperty("response", "accepted");
-      response.addProperty("sdpAnswer", sdpAnswer);
+            synchronized (session) {
+                presenterUserSession.sendMessage(response);
+            }
+            presenterWebRtc.gatherCandidates();
+            i++;
+        }
+    }
 
-      synchronized (session) {
-        presenterUserSession.sendMessage(response);
-      }
-      presenterWebRtc.gatherCandidates();
+    private synchronized void viewer(final WebSocketSession session, JsonObject jsonMessage)
+            throws IOException {
 
-//    } else {
-//      JsonObject response = new JsonObject();
-//      response.addProperty("id", "presenterResponse");
-//      response.addProperty("response", "rejected");
-//      response.addProperty("message",
-//          "Another user is currently acting as sender. Try again later ...");
-//      session.sendMessage(new TextMessage(response.toString()));
-//    }
-  }
+        if (subscriberSessionList.size() > 4){
+            JsonObject response = new JsonObject();
+            response.addProperty("id", "presenterResponse");
+            response.addProperty("response", "rejected");
+            response.addProperty("message",
+                    "Maximum amount of subscribers is reached. Try again later ...");
+            session.sendMessage(new TextMessage(response.toString()));
+        } else{
 
-  private synchronized void viewer(final WebSocketSession session, JsonObject jsonMessage)
-      throws IOException {
-    if (presenterUserSession == null || presenterUserSession.getWebRtcEndpoint() == null) {
-      JsonObject response = new JsonObject();
-      response.addProperty("id", "viewerResponse");
-      response.addProperty("response", "rejected");
-      response.addProperty("message",
-          "No active sender now. Become sender or . Try again later ...");
-      session.sendMessage(new TextMessage(response.toString()));
-    } else {
-        if (viewers.containsKey(session.getId())) {
+        if (presenterUserSession == null || presenterUserSession.getWebRtcEndpoint() == null) {
             JsonObject response = new JsonObject();
             response.addProperty("id", "viewerResponse");
             response.addProperty("response", "rejected");
-            response.addProperty("message", "You are already viewing in this session. "
-                    + "Use a different browser to add additional viewers.");
+            response.addProperty("message",
+                    "No active sender now. Become sender or . Try again later ...");
             session.sendMessage(new TextMessage(response.toString()));
-            return;
-        }
-        UserSession viewer = new UserSession(session);
-        viewers.put(session.getId(), viewer);
+        } else {
+            UserSession viewer = new UserSession(session);
 
-        WebRtcEndpoint nextWebRtc = new WebRtcEndpoint.Builder(pipeline).build();
+            viewers.put(session.getId(), viewer);
 
-        nextWebRtc.addIceCandidateFoundListener(new EventListener<IceCandidateFoundEvent>() {
+            WebRtcEndpoint nextWebRtc = new WebRtcEndpoint.Builder(pipeline).build();
 
-            @Override
-            public void onEvent(IceCandidateFoundEvent event) {
-                JsonObject response = new JsonObject();
-                response.addProperty("id", "iceCandidate");
-                response.add("candidate", JsonUtils.toJsonObject(event.getCandidate()));
-                try {
-                    synchronized (session) {
-                        session.sendMessage(new TextMessage(response.toString()));
+            nextWebRtc.addIceCandidateFoundListener(new EventListener<IceCandidateFoundEvent>() {
+
+                @Override
+                public void onEvent(IceCandidateFoundEvent event) {
+                    JsonObject response = new JsonObject();
+                    response.addProperty("id", "iceCandidate");
+                    response.add("candidate", JsonUtils.toJsonObject(event.getCandidate()));
+                    try {
+                        synchronized (session) {
+                            session.sendMessage(new TextMessage(response.toString()));
+                        }
+                    } catch (IOException e) {
+                        log.debug(e.getMessage());
                     }
-                } catch (IOException e) {
-                    log.debug(e.getMessage());
                 }
-            }
-        });
+            });
 
-        for (UserSession userSession : userSessionList) {
-            viewer.setWebRtcEndpoint(nextWebRtc);
-            userSession.getWebRtcEndpoint().connect(nextWebRtc);
-        }
-//            presenterUserSession.getWebRtcEndpoint().connect(nextWebRtc);
-//            userSession.getWebRtcEndpoint().connect(nextWebRtc);
+            for (UserSession userSession : presenterSessionList) {
+                viewer.setWebRtcEndpoint(nextWebRtc);
+                userSession.getWebRtcEndpoint().connect(nextWebRtc);
+            }
+            HubPort hubPort = new HubPort.Builder(composite).build();
             hubPort.connect(nextWebRtc);
             nextWebRtc.connect(hubPort);
 
@@ -245,36 +247,49 @@ public class CallHandler extends TextWebSocketHandler {
                 viewer.sendMessage(response);
             }
             nextWebRtc.gatherCandidates();
-
+            subscriberSessionList.add(viewer);
+        }
+        }
     }
-  }
 
-  private synchronized void stop(WebSocketSession session) throws IOException {
-    String sessionId = session.getId();
-    if (presenterUserSession != null && presenterUserSession.getSession().getId().equals(sessionId)) {
-      for (UserSession viewer : viewers.values()) {
-        JsonObject response = new JsonObject();
-        response.addProperty("id", "stopCommunication");
-        viewer.sendMessage(response);
-      }
+    private synchronized void stop(WebSocketSession session) throws IOException {
+        String sessionId = session.getId();
+        if (presenterUserSession != null && presenterUserSession.getSession().getId().equals(sessionId)) {
+            for (UserSession viewer : viewers.values()) {
+                JsonObject response = new JsonObject();
+                response.addProperty("id", "stopCommunication");
+                viewer.sendMessage(response);
+            }
 
-      log.info("Releasing media pipeline");
-      if (pipeline != null) {
-        pipeline.release();
-      }
-      pipeline = null;
-      presenterUserSession = null;
-    } else if (viewers.containsKey(sessionId)) {
-      if (viewers.get(sessionId).getWebRtcEndpoint() != null) {
-        viewers.get(sessionId).getWebRtcEndpoint().release();
-      }
-      viewers.remove(sessionId);
+            log.info("Releasing media pipeline");
+            if (pipeline != null) {
+                pipeline.release();
+            }
+            pipeline = null;
+        } else if (viewers.containsKey(sessionId)) {
+            if (viewers.get(sessionId).getWebRtcEndpoint() != null) {
+                viewers.get(sessionId).getWebRtcEndpoint().release();
+            }
+            viewers.remove(sessionId);
+        }
     }
-  }
 
-  @Override
-  public void afterConnectionClosed(WebSocketSession session, CloseStatus status) throws Exception {
-    stop(session);
-  }
+    private List<HubPort> initializeHubPorts(){
+        List<HubPort> hubPortList = new ArrayList<>();
+        HubPort hubPort = new HubPort.Builder(composite).build();
+        HubPort hubPort1 = new HubPort.Builder(composite).build();
+        HubPort hubPort2 = new HubPort.Builder(composite).build();
+        HubPort hubPort3 = new HubPort.Builder(composite).build();
+        hubPortList.add(hubPort);
+        hubPortList.add(hubPort1);
+        hubPortList.add(hubPort2);
+        hubPortList.add(hubPort3);
+        return hubPortList;
+    }
+
+    @Override
+    public void afterConnectionClosed(WebSocketSession session, CloseStatus status) throws Exception {
+        stop(session);
+    }
 
 }

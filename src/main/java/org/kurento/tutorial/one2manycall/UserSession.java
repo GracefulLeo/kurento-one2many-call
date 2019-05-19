@@ -17,8 +17,7 @@
 
 package org.kurento.tutorial.one2manycall;
 
-import java.io.IOException;
-
+import com.google.gson.JsonObject;
 import org.kurento.client.IceCandidate;
 import org.kurento.client.WebRtcEndpoint;
 import org.slf4j.Logger;
@@ -26,7 +25,7 @@ import org.slf4j.LoggerFactory;
 import org.springframework.web.socket.TextMessage;
 import org.springframework.web.socket.WebSocketSession;
 
-import com.google.gson.JsonObject;
+import java.io.IOException;
 
 /**
  * User session.
@@ -40,6 +39,7 @@ public class UserSession {
 
   private final WebSocketSession session;
   private WebRtcEndpoint webRtcEndpoint;
+  private int id;
 
   public UserSession(WebSocketSession session) {
     this.session = session;
@@ -64,5 +64,13 @@ public class UserSession {
 
   public void addCandidate(IceCandidate candidate) {
     webRtcEndpoint.addIceCandidate(candidate);
+  }
+
+  public int getId() {
+    return id;
+  }
+
+  public void setId(int id) {
+    this.id = id;
   }
 }
