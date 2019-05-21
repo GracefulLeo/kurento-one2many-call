@@ -59,7 +59,6 @@ public class CallHandler extends TextWebSocketHandler {
     private MediaPipeline pipeline;
     private UserSession presenterUserSession;
     private Composite composite;
-    private int i = 0;
     private List<HubPort> hubPortList = new ArrayList<>();
 
     @Override
@@ -122,7 +121,8 @@ public class CallHandler extends TextWebSocketHandler {
 
     private synchronized void presenter(final WebSocketSession session, JsonObject jsonMessage)
             throws IOException {
-        if(presenterSessionList.size()>3){
+        System.out.println(presenterSessionList.size());
+        if(presenterSessionList.size()>3 || (hubPortList.size() != 0 && hubPortList.size() < presenterSessionList.size())){
             JsonObject response = new JsonObject();
             response.addProperty("id", "presenterResponse");
             response.addProperty("response", "rejected");
@@ -156,16 +156,16 @@ public class CallHandler extends TextWebSocketHandler {
             });
 
 
+            presenterUserSession.setId(presenterSessionList.size());
             presenterSessionList.add(presenterUserSession);
             if (composite == null) {
                 composite = new Composite.Builder(pipeline).build();
             }
-            System.out.println(hubPortList.isEmpty());
-            if (hubPortList.isEmpty()) {
-                hubPortList = initializeHubPorts();
-            }
 
-            presenterWebRtc.connect(hubPortList.get(i));
+            HubPort hubPort = new HubPort.Builder(composite).build();
+            hubPortList.add(hubPort);
+
+            presenterWebRtc.connect(hubPortList.get(presenterSessionList.size()-1));
 
             String sdpOffer = jsonMessage.getAsJsonPrimitive("sdpOffer").getAsString();
             String sdpAnswer = presenterWebRtc.processOffer(sdpOffer);
@@ -179,7 +179,6 @@ public class CallHandler extends TextWebSocketHandler {
                 presenterUserSession.sendMessage(response);
             }
             presenterWebRtc.gatherCandidates();
-            i++;
         }
     }
 
@@ -254,38 +253,46 @@ public class CallHandler extends TextWebSocketHandler {
 
     private synchronized void stop(WebSocketSession session) throws IOException {
         String sessionId = session.getId();
-        if (presenterUserSession != null && presenterUserSession.getSession().getId().equals(sessionId)) {
+        if (presenterSessionList.size() != 0) {
+            for (UserSession userSession : presenterSessionList) {
+                if (userSession.getSession().getId().equals(sessionId)) {
+
+                    log.info("Releasing media pipeline");
+//                    if (pipeline != null) {
+//                        pipeline.release();
+//                    }
+//                    pipeline = null;
+                    if (viewers.containsKey(sessionId)) {
+                        if (viewers.get(sessionId).getWebRtcEndpoint() != null) {
+                            viewers.get(sessionId).getWebRtcEndpoint().release();
+
+                        }
+                        viewers.remove(sessionId);
+                    }
+                    hubPortList.get(userSession.getId()).release();
+                    hubPortList.remove(userSession.getId());
+                    userSession.getWebRtcEndpoint().release();
+                    presenterSessionList.remove(userSession);
+                    userSession = null;
+                    break;
+                }
+
+            }
+//            && presenterSessionList.getSession().getId().equals(sessionId)) {
+        }
+        if (presenterSessionList.size() == 0) {
             for (UserSession viewer : viewers.values()) {
                 JsonObject response = new JsonObject();
                 response.addProperty("id", "stopCommunication");
                 viewer.sendMessage(response);
             }
-
-            log.info("Releasing media pipeline");
-            if (pipeline != null) {
-                pipeline.release();
-            }
+            pipeline.release();
             pipeline = null;
-        } else if (viewers.containsKey(sessionId)) {
-            if (viewers.get(sessionId).getWebRtcEndpoint() != null) {
-                viewers.get(sessionId).getWebRtcEndpoint().release();
-            }
-            viewers.remove(sessionId);
+            composite = null;
         }
+
     }
 
-    private List<HubPort> initializeHubPorts(){
-        List<HubPort> hubPortList = new ArrayList<>();
-        HubPort hubPort = new HubPort.Builder(composite).build();
-        HubPort hubPort1 = new HubPort.Builder(composite).build();
-        HubPort hubPort2 = new HubPort.Builder(composite).build();
-        HubPort hubPort3 = new HubPort.Builder(composite).build();
-        hubPortList.add(hubPort);
-        hubPortList.add(hubPort1);
-        hubPortList.add(hubPort2);
-        hubPortList.add(hubPort3);
-        return hubPortList;
-    }
 
     @Override
     public void afterConnectionClosed(WebSocketSession session, CloseStatus status) throws Exception {
